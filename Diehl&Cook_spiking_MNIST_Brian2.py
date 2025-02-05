@@ -15,6 +15,9 @@ from struct import unpack
 from brian2 import *
 import brian2 as b2
 from brian2tools import *
+import torch
+import torchvision
+import torchvision.transforms as transforms
 
 # specify the location of the MNIST data
 MNIST_data_path = "C:/Users/tommy/Documents/GitHub/Brian2STDPMNIST/data/MNIST/raw"
@@ -22,9 +25,7 @@ MNIST_data_path = "C:/Users/tommy/Documents/GitHub/brian-stdp-mnist/data/MNIST/r
 #------------------------------------------------------------------------------
 # functions
 #------------------------------------------------------------------------------
-import torch
-import torchvision
-import torchvision.transforms as transforms
+
 
 def get_labeled_data(use_train=True):
     """Load MNIST dataset using PyTorch instead of manually reading .ubyte files"""
@@ -197,7 +198,7 @@ print('time needed to load test set:', end - start)
 #------------------------------------------------------------------------------
 # set parameters and equations
 #------------------------------------------------------------------------------
-test_mode = True
+test_mode = False
 
 np.random.seed(0)
 data_path = './'
@@ -272,6 +273,14 @@ wmax_ee = 1.0
 exp_ee_pre = 0.2
 exp_ee_post = exp_ee_pre
 STDP_offset = 0.4
+n_astro = int(n_e * 0.2)  # 20% of excitatory neurons have astrocytes
+tau_Ca = 100 * ms
+tau_IP3 = 100 * ms
+D_Ca = 0.1  # Diffusion coefficient for Ca
+D_IP3 = 0.1  # Diffusion coefficient for IP3
+threshold_Ca = 0.3
+
+
 
 if test_mode:
     scr_e = 'v = v_reset_e; timer = 0*ms'
@@ -292,6 +301,20 @@ neuron_eqs_e = '''
         dge/dt = -ge/(1.0*ms)                                   : 1
         dgi/dt = -gi/(2.0*ms)                                  : 1
         '''
+astrocyte_eqs = '''
+    dCa/dt = (-Ca / tau_Ca) + spike_flag * alpha_neuro + D_Ca * (Ca_neigh - Ca) : 1
+    dIP3/dt = (-IP3 / tau_IP3) + D_IP3 * (IP3_neigh - IP3) : 1
+    dh/dt = -h / tau_h : 1
+    Iastro_neuron = 1 * int(Ca > threshold_Ca) : 1  # Astrocyte to neuron influence
+    Ca_neigh : 1  # Neighbor calcium (for diffusion)
+    IP3_neigh : 1  # Neighbor IP3 (for diffusion)
+    spike_flag = int(spikes_pre > 0) : 1  # Fix for boolean issue
+'''
+
+
+
+
+
 if test_mode:
     neuron_eqs_e += '\n  theta      :volt'
 else:
@@ -326,6 +349,17 @@ result_monitor = np.zeros((update_interval,n_e))
 
 neuron_groups['e'] = b2.NeuronGroup(n_e*len(population_names), neuron_eqs_e, threshold= v_thresh_e_str, refractory= refrac_e, reset= scr_e, method='euler')
 neuron_groups['i'] = b2.NeuronGroup(n_i*len(population_names), neuron_eqs_i, threshold= v_thresh_i_str, refractory= refrac_i, reset= v_reset_i_str, method='euler')
+astrocytes = b2.NeuronGroup(
+    n_astro, astrocyte_eqs, threshold='threshold_met', method='euler'
+)
+astro_diffusion = b2.Synapses(astrocytes, astrocytes,
+                              model='''
+                              Ca_neigh_post = Ca_pre : 1 (summed)
+                              IP3_neigh_post = IP3_pre : 1 (summed)
+                              ''')
+n_astro_sqrt = int(np.sqrt(n_astro))  # Ensure n_astro is a perfect square
+
+astro_diffusion.connect(condition='abs(i - j) == 1 or abs(i - j) == n_astro_sqrt')
 
 
 #------------------------------------------------------------------------------
@@ -402,7 +436,16 @@ for name in input_connection_names:
         connections[connName].connect(True) # all-to-all connection
         connections[connName].delay = 'minDelay + rand() * deltaDelay'
         connections[connName].w = weightMatrix[connections[connName].i, connections[connName].j]
-
+astro_neuron_conn = b2.Synapses(neuron_groups['Ae'], astrocytes, 
+                                model='w : 1', 
+                                on_pre='Ca += w')
+astro_neuron_conn.connect(p=0.1)  # Randomly connect 10% of neurons
+astro_neuron_conn.w = 'rand() * 0.5'
+astro_feedback = b2.Synapses(astrocytes, neuron_groups['Ae'], 
+                             model='w : 1', 
+                             on_pre='ge_post += 0.5 * w')  
+astro_feedback.connect(p=0.1)  
+astro_feedback.w = 'rand() * 0.3'
 
 #------------------------------------------------------------------------------
 # run the simulation and set inputs
@@ -549,8 +592,8 @@ plot_2d_input_weights()
 #brian_plot(connections['AiAe'].delay)
 
 
-b2.ioff()
-b2.show()
+#b2.ioff()
+#b2.show()
 
 
 
