@@ -199,6 +199,8 @@ print('time needed to load test set:', end - start)
 # set parameters and equations
 #------------------------------------------------------------------------------
 test_mode = False
+use_testing_set = False
+
 
 np.random.seed(0)
 data_path = './'
@@ -501,10 +503,12 @@ while j < (int(num_examples)):
     else:
         result_monitor[j%update_interval,:] = current_spike_count
         if test_mode and use_testing_set:
-           input_numbers[j] = testing['y'][j % 10000]
-
+            # Use test set
+            input_numbers[j] = testing['y'][j % 10000]
         else:
-            input_numbers[j] = testing['y'][j % 60000]
+            # Use training set
+            input_numbers[j] = training['y'][j % 60000]
+
 
         outputNumbers[j,:] = get_recognized_number_ranking(assignments, result_monitor[j%update_interval,:])
         if j % 100 == 0 and j > 0:
@@ -512,7 +516,7 @@ while j < (int(num_examples)):
         if j % update_interval == 0 and j > 0:
             if do_plot_performance:
                 unused, performance = update_performance_plot(performance_monitor, performance, j, fig_performance)
-                print('Classification performance', performance[:(j/float(update_interval))+1])
+                print('Classification performance', performance[:int(j/float(update_interval)) + 1])
         for i,name in enumerate(input_population_names):
             input_groups[name+'e'].rates = 0 * Hz
         net.run(resting_time)
